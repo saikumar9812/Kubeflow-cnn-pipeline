@@ -1,0 +1,220 @@
+# PIPELINE DEFINITION
+# Name: fashion-mnist-cnn
+# Description: Train a CNN on Fashion-MNIST, then run inference with the trained model.
+# Inputs:
+#    batch_size: int [Default: 128.0]
+#    epochs: int [Default: 2.0]
+#    num_samples: int [Default: 10.0]
+# Outputs:
+#    predictions: system.Dataset
+#    test_accuracy: float
+components:
+  comp-run-inference:
+    executorLabel: exec-run-inference
+    inputDefinitions:
+      artifacts:
+        model:
+          artifactType:
+            schemaTitle: system.Model
+            schemaVersion: 0.0.1
+      parameters:
+        num_samples:
+          parameterType: NUMBER_INTEGER
+    outputDefinitions:
+      artifacts:
+        metrics:
+          artifactType:
+            schemaTitle: system.Metrics
+            schemaVersion: 0.0.1
+        predictions:
+          artifactType:
+            schemaTitle: system.Dataset
+            schemaVersion: 0.0.1
+      parameters:
+        Output:
+          parameterType: NUMBER_DOUBLE
+  comp-train-cnn:
+    executorLabel: exec-train-cnn
+    inputDefinitions:
+      parameters:
+        batch_size:
+          parameterType: NUMBER_INTEGER
+        epochs:
+          parameterType: NUMBER_INTEGER
+    outputDefinitions:
+      artifacts:
+        metrics:
+          artifactType:
+            schemaTitle: system.Metrics
+            schemaVersion: 0.0.1
+        model:
+          artifactType:
+            schemaTitle: system.Model
+            schemaVersion: 0.0.1
+deploymentSpec:
+  executors:
+    exec-run-inference:
+      container:
+        args:
+        - --executor_input
+        - '{{$}}'
+        - --function_to_execute
+        - run_inference
+        command:
+        - sh
+        - -c
+        - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
+          \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
+          \ python3 -m pip install --quiet --no-warn-script-location 'kfp==2.18.0'\
+          \ '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"' && \"\
+          $0\" \"$@\"\n"
+        - sh
+        - -ec
+        - 'program_path=$(mktemp -d)
+
+
+          printf "%s" "$0" > "$program_path/ephemeral_component.py"
+
+          _KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
+
+          '
+        - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
+          \ *\n\ndef run_inference(model: Input[Model], num_samples: int,\n      \
+          \            predictions: Output[Dataset], metrics: Output[Metrics]) ->\
+          \ float:\n    import json\n    import os\n    import numpy as np\n    from\
+          \ tensorflow import keras\n\n    class_names = [\"T-shirt/top\", \"Trouser\"\
+          , \"Pullover\", \"Dress\", \"Coat\",\n                   \"Sandal\", \"\
+          Shirt\", \"Sneaker\", \"Bag\", \"Ankle boot\"]\n    _, (x_test, y_test)\
+          \ = keras.datasets.fashion_mnist.load_data()\n    x_test = (x_test / 255.0).astype(\"\
+          float32\")[..., None]\n\n    net = keras.models.load_model(os.path.join(model.path,\
+          \ \"model.keras\"))\n    logits = net.predict(x_test, batch_size=512, verbose=0)\n\
+          \    probs = np.exp(logits - logits.max(axis=1, keepdims=True))\n    probs\
+          \ /= probs.sum(axis=1, keepdims=True)\n    pred = probs.argmax(axis=1)\n\
+          \    accuracy = float((pred == y_test).mean())\n\n    rows = [{\"index\"\
+          : i,\n             \"predicted\": class_names[int(pred[i])],\n         \
+          \    \"confidence\": round(float(probs[i].max()), 4),\n             \"actual\"\
+          : class_names[int(y_test[i])]}\n            for i in range(min(num_samples,\
+          \ len(y_test)))]\n    with open(predictions.path, \"w\") as f:\n       \
+          \ json.dump(rows, f, indent=2)\n    for r in rows:\n        print(f\"#{r['index']}:\
+          \ predicted={r['predicted']} ({r['confidence']:.0%}) actual={r['actual']}\"\
+          )\n    print(f\"Test accuracy on {len(y_test)} images: {accuracy:.4f}\"\
+          )\n\n    metrics.log_metric(\"test_accuracy\", accuracy)\n    return accuracy\n\
+          \n"
+        image: tensorflow/tensorflow:2.16.1
+    exec-train-cnn:
+      container:
+        args:
+        - --executor_input
+        - '{{$}}'
+        - --function_to_execute
+        - train_cnn
+        command:
+        - sh
+        - -c
+        - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
+          \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
+          \ python3 -m pip install --quiet --no-warn-script-location 'kfp==2.18.0'\
+          \ '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"' && \"\
+          $0\" \"$@\"\n"
+        - sh
+        - -ec
+        - 'program_path=$(mktemp -d)
+
+
+          printf "%s" "$0" > "$program_path/ephemeral_component.py"
+
+          _KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
+
+          '
+        - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
+          \ *\n\ndef train_cnn(epochs: int, batch_size: int, model: Output[Model],\
+          \ metrics: Output[Metrics]):\n    import os\n    from tensorflow import\
+          \ keras\n\n    (x_train, y_train), _ = keras.datasets.fashion_mnist.load_data()\n\
+          \    x_train = (x_train / 255.0).astype(\"float32\")[..., None]\n\n    net\
+          \ = keras.Sequential([\n        keras.Input(shape=(28, 28, 1)),\n      \
+          \  keras.layers.Conv2D(32, 3, activation=\"relu\"),\n        keras.layers.MaxPooling2D(),\n\
+          \        keras.layers.Conv2D(64, 3, activation=\"relu\"),\n        keras.layers.MaxPooling2D(),\n\
+          \        keras.layers.Flatten(),\n        keras.layers.Dropout(0.3),\n \
+          \       keras.layers.Dense(128, activation=\"relu\"),\n        keras.layers.Dense(10),\n\
+          \    ])\n    net.compile(optimizer=\"adam\",\n                loss=keras.losses.SparseCategoricalCrossentropy(from_logits=True),\n\
+          \                metrics=[\"accuracy\"])\n    hist = net.fit(x_train, y_train,\
+          \ epochs=epochs, batch_size=batch_size,\n                   validation_split=0.1,\
+          \ verbose=2)\n\n    os.makedirs(model.path, exist_ok=True)\n    net.save(os.path.join(model.path,\
+          \ \"model.keras\"))\n    model.metadata[\"framework\"] = \"keras\"\n   \
+          \ model.metadata[\"epochs\"] = epochs\n    metrics.log_metric(\"train_accuracy\"\
+          , float(hist.history[\"accuracy\"][-1]))\n    metrics.log_metric(\"val_accuracy\"\
+          , float(hist.history[\"val_accuracy\"][-1]))\n\n"
+        image: tensorflow/tensorflow:2.16.1
+pipelineInfo:
+  description: Train a CNN on Fashion-MNIST, then run inference with the trained model.
+  name: fashion-mnist-cnn
+root:
+  dag:
+    outputs:
+      artifacts:
+        predictions:
+          artifactSelectors:
+          - outputArtifactKey: predictions
+            producerSubtask: run-inference
+      parameters:
+        test_accuracy:
+          valueFromParameter:
+            outputParameterKey: Output
+            producerSubtask: run-inference
+    tasks:
+      run-inference:
+        cachingOptions:
+          enableCache: true
+        componentRef:
+          name: comp-run-inference
+        dependentTasks:
+        - train-cnn
+        inputs:
+          artifacts:
+            model:
+              taskOutputArtifact:
+                outputArtifactKey: model
+                producerTask: train-cnn
+          parameters:
+            num_samples:
+              componentInputParameter: num_samples
+        taskInfo:
+          name: run-inference
+      train-cnn:
+        cachingOptions:
+          enableCache: true
+        componentRef:
+          name: comp-train-cnn
+        inputs:
+          parameters:
+            batch_size:
+              componentInputParameter: batch_size
+            epochs:
+              componentInputParameter: epochs
+        taskInfo:
+          name: train-cnn
+  inputDefinitions:
+    parameters:
+      batch_size:
+        defaultValue: 128.0
+        isOptional: true
+        parameterType: NUMBER_INTEGER
+      epochs:
+        defaultValue: 2.0
+        isOptional: true
+        parameterType: NUMBER_INTEGER
+      num_samples:
+        defaultValue: 10.0
+        isOptional: true
+        parameterType: NUMBER_INTEGER
+  outputDefinitions:
+    artifacts:
+      predictions:
+        artifactType:
+          schemaTitle: system.Dataset
+          schemaVersion: 0.0.1
+    parameters:
+      test_accuracy:
+        parameterType: NUMBER_DOUBLE
+schemaVersion: 2.1.0
+sdkVersion: kfp-2.18.0
